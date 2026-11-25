@@ -1,11 +1,11 @@
 import { supabase } from '../lib/supabaseClient';
 import { 
   TABLE_EMERGENCY_EVENTS, 
-  TABLE_GPS_BREADCRUMBS, 
+  TABLE_GPS_BREADCRUMBS,
   STORAGE_BUCKET_VIDEOS,
   STORAGE_BUCKET_AUDIO 
 } from '../lib/constants';
-import { EmergencyEvent, SupabaseHealth, LocationState, UserProfile } from '../types';
+import { EmergencyEvent, SupabaseHealth, LocationState, UserProfile, Guardian } from '../types';
 
 export const supabaseService = {
   /**
@@ -47,6 +47,7 @@ export const supabaseService = {
 
   /**
    * Dispatches a real emergency incident event to the PostgreSQL `emergency_events` table.
+   * Securely attaches user_id if authenticated and retrieves tracking_access_token.
    */
   async createEmergencyEvent(
     source: string, 
@@ -58,7 +59,16 @@ export const supabaseService = {
       ? `https://maps.google.com/?q=${loc.latitude},${loc.longitude}` 
       : null;
 
-    const record = {
+    // Detect authenticated session if available
+    let userId: string | null = null;
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      userId = session?.user?.id || null;
+    } catch {
+      userId = null;
+    }
+
+    const record: any = {
       device_name: deviceName,
       trigger_source: source,
       latitude: loc.latitude,
@@ -70,14 +80,21 @@ export const supabaseService = {
       guardians_notified: guardiansCount,
     };
 
+    if (userId) {
+      record.user_id = userId;
+    }
+
     try {
       const { data, error } = await supabase
         .from(TABLE_EMERGENCY_EVENTS)
         .insert([record])
-        .select('id')
+        .select('id, tracking_access_token')
         .single();
 
       if (!error && data?.id) {
+        if (data.tracking_access_token) {
+          localStorage.setItem('safenex_active_tracking_token', data.tracking_access_token);
+        }
         return data.id;
       }
       if (error) {
@@ -132,6 +149,7 @@ export const supabaseService = {
 
   /**
    * Updates an emergency event status to 'RESOLVED' once the cryptographic PIN is verified.
+   * Supports both authenticated update and anonymous RPC fallback.
    */
   async resolveEmergencyEvent(eventId: string): Promise<void> {
     try {
@@ -144,7 +162,13 @@ export const supabaseService = {
         .eq('id', eventId);
 
       if (error) {
-        console.warn('Error resolving event in cloud:', error.message);
+        console.warn('Cloud update returned error, attempting anonymous RPC resolution:', error.message);
+        const { error: rpcErr } = await supabase.rpc('resolve_anonymous_emergency', {
+          p_event_id: eventId,
+        });
+        if (rpcErr) {
+          console.warn('RPC resolution fallback error:', rpcErr.message);
+        }
       }
     } catch (e) {
       console.warn('Offline resolution error:', e);
@@ -156,10 +180,12 @@ export const supabaseService = {
       ev.id === eventId ? { ...ev, status: 'RESOLVED', resolved_at: new Date().toISOString() } : ev
     );
     localStorage.setItem('safenex_cached_events', JSON.stringify(updated));
+    localStorage.removeItem('safenex_active_tracking_token');
   },
 
   /**
-   * Uploads real audio or video evidence to Supabase Storage and attaches URL to the event.
+   * Uploads real audio or video evidence to Supabase Storage and attaches secure URL to the event.
+   * Conforms to hardened RLS user-folder layout and private bucket signed URL access.
    */
   async uploadEvidence(
     eventId: string, 
@@ -171,25 +197,42 @@ export const supabaseService = {
     const contentType = type === 'video' ? 'video/webm' : 'audio/webm';
 
     try {
+      // Determine folder path compliant with hardened Storage RLS
+      let folder = `anonymous/${eventId}`;
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session?.user?.id) {
+          folder = session.user.id;
+        }
+      } catch {
+        folder = `anonymous/${eventId}`;
+      }
+
+      const storagePath = `${folder}/${fileName}`;
+
       const { data, error } = await supabase.storage
         .from(bucket)
-        .upload(fileName, blob, {
+        .upload(storagePath, blob, {
           contentType,
           upsert: true,
         });
 
       if (!error && data?.path) {
-        const { data: urlData } = supabase.storage.from(bucket).getPublicUrl(fileName);
-        const publicUrl = urlData.publicUrl;
+        // Generate signed URL valid for 24 hours (86,400s) for private bucket access
+        const { data: signedData } = await supabase.storage
+          .from(bucket)
+          .createSignedUrl(storagePath, 86400);
+
+        const secureEvidenceUrl = signedData?.signedUrl || '';
 
         // Attach evidence URL to the emergency event record in Supabase
-        const updateField = type === 'video' ? { video_url: publicUrl } : { audio_url: publicUrl };
+        const updateField = type === 'video' ? { video_url: secureEvidenceUrl } : { audio_url: secureEvidenceUrl };
         await supabase
           .from(TABLE_EMERGENCY_EVENTS)
           .update(updateField)
           .eq('id', eventId);
 
-        return publicUrl;
+        return secureEvidenceUrl;
       } else if (error) {
         console.warn(`Supabase Storage upload to ${bucket} error:`, error.message);
       }
@@ -224,6 +267,98 @@ export const supabaseService = {
     // Fallback to locally cached incidents if cloud is offline
     const local = JSON.parse(localStorage.getItem('safenex_cached_events') || '[]');
     return local;
+  },
+
+  /**
+   * Secure Guardian Tracking RPC
+   * Queries real-time incident data using unguessable 128-bit tracking token
+   */
+  async fetchEmergencyTracking(eventId: string, token: string): Promise<any | null> {
+    try {
+      const { data, error } = await supabase.rpc('get_emergency_tracking', {
+        p_event_id: eventId,
+        p_tracking_token: token,
+      });
+
+      if (!error && data) {
+        return data;
+      }
+      if (error) {
+        console.warn('Emergency tracking RPC error:', error.message);
+      }
+    } catch (e) {
+      console.warn('Tracking RPC network failure:', e);
+    }
+    return null;
+  },
+
+  /**
+   * Cloud Emergency Contacts (Guardians) Management with RLS & Offline Local Storage Fallback
+   */
+  async fetchEmergencyContacts(): Promise<Guardian[]> {
+    try {
+      const { data, error } = await supabase
+        .from('emergency_contacts')
+        .select('*')
+        .order('created_at', { ascending: true });
+
+      if (!error && Array.isArray(data)) {
+        return data.map((c: any) => ({
+          id: c.id,
+          name: c.name,
+          phone: c.phone_number,
+          relation: c.relationship || 'Emergency Contact',
+          isPrimary: c.is_primary || false,
+        }));
+      }
+    } catch (e) {
+      console.warn('Error fetching cloud contacts:', e);
+    }
+    return JSON.parse(localStorage.getItem('safenex_real_guardians_v2') || '[]');
+  },
+
+  async addEmergencyContact(guardian: Omit<Guardian, 'id'>): Promise<Guardian | null> {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.user) return null;
+
+      const { data, error } = await supabase
+        .from('emergency_contacts')
+        .insert([{
+          user_id: session.user.id,
+          name: guardian.name,
+          phone_number: guardian.phone,
+          relationship: guardian.relation,
+          is_primary: guardian.isPrimary || false,
+        }])
+        .select('*')
+        .single();
+
+      if (!error && data) {
+        return {
+          id: data.id,
+          name: data.name,
+          phone: data.phone_number,
+          relation: data.relationship || 'Emergency Contact',
+          isPrimary: data.is_primary || false,
+        };
+      }
+    } catch (e) {
+      console.warn('Cloud contact insertion error:', e);
+    }
+    return null;
+  },
+
+  async deleteEmergencyContact(contactId: string): Promise<boolean> {
+    try {
+      const { error } = await supabase
+        .from('emergency_contacts')
+        .delete()
+        .eq('id', contactId);
+      return !error;
+    } catch {
+      return false;
+    }
   },
 
   /**

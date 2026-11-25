@@ -18,6 +18,20 @@ android {
         vectorDrawables {
             useSupportLibrary = true
         }
+
+        val mapsApiKey = (project.findProperty("MAPS_API_KEY") as? String)
+            ?: System.getenv("MAPS_API_KEY")
+            ?: ""
+        manifestPlaceholders["MAPS_API_KEY"] = mapsApiKey
+
+        val supabaseUrl = (project.findProperty("SUPABASE_URL") as? String)
+            ?: System.getenv("SUPABASE_URL")
+            ?: ""
+        val supabaseAnonKey = (project.findProperty("SUPABASE_ANON_KEY") as? String)
+            ?: System.getenv("SUPABASE_ANON_KEY")
+            ?: ""
+        buildConfigField("String", "SUPABASE_URL", "\"$supabaseUrl\"")
+        buildConfigField("String", "SUPABASE_ANON_KEY", "\"$supabaseAnonKey\"")
     }
 
     buildTypes {
@@ -38,6 +52,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
     composeOptions {
         kotlinCompilerExtensionVersion = "1.5.8"

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { AlertTriangle, Lock, Share2, Volume2, VolumeX, Eye, EyeOff, Radio } from 'lucide-react';
-import { LocationState, Guardian } from '../types';
+import { AlertTriangle, Lock, Share2, Volume2, VolumeX, Eye, EyeOff, Radio, Sparkles, Copy, Check, ShieldCheck } from 'lucide-react';
+import { LocationState, Guardian, ThreatIntelligenceResult, IncidentAssessmentResult, EmergencyMessageResult } from '../types';
 import { audioSiren } from '../services/audioSirenService';
 import { supabaseService } from '../services/supabaseService';
 import { securityManager } from '../lib/security';
@@ -13,6 +13,10 @@ interface EmergencyActiveOverlayProps {
   location: LocationState;
   onDisarm: () => void;
   primaryGuardian?: Guardian | null;
+  threatAssessment?: ThreatIntelligenceResult | null;
+  incidentAssessment?: IncidentAssessmentResult | null;
+  emergencyMessages?: EmergencyMessageResult | null;
+  guardianAcknowledged?: boolean;
 }
 
 export const EmergencyActiveOverlay: React.FC<EmergencyActiveOverlayProps> = ({
@@ -22,14 +26,20 @@ export const EmergencyActiveOverlay: React.FC<EmergencyActiveOverlayProps> = ({
   location,
   onDisarm,
   primaryGuardian,
+  threatAssessment,
+  incidentAssessment,
+  emergencyMessages,
+  guardianAcknowledged = false,
 }) => {
   const [pinDigits, setPinDigits] = useState<string[]>([]);
   const [pinError, setPinError] = useState(false);
+  const [lockoutSeconds, setLockoutSeconds] = useState(0);
   const [isSirenMuted, setIsSirenMuted] = useState(false);
   const [isStrobeDisabled, setIsStrobeDisabled] = useState(false);
   const [strobeFlash, setStrobeFlash] = useState(false);
   const [breadcrumbCount, setBreadcrumbCount] = useState(1);
   const [recordingStatus, setRecordingStatus] = useState('Initializing MediaRecorder...');
+  const [copiedSms, setCopiedSms] = useState(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordedChunksRef = useRef<Blob[]>([]);
 
@@ -110,6 +120,13 @@ export const EmergencyActiveOverlay: React.FC<EmergencyActiveOverlayProps> = ({
   if (!isOpen) return null;
 
   const handleDigit = async (digit: string) => {
+    const remaining = securityManager.getLockoutRemainingSeconds();
+    if (remaining > 0) {
+      setLockoutSeconds(remaining);
+      setPinError(true);
+      return;
+    }
+
     if (pinDigits.length < 4) {
       const next = [...pinDigits, digit];
       setPinDigits(next);
@@ -126,7 +143,10 @@ export const EmergencyActiveOverlay: React.FC<EmergencyActiveOverlayProps> = ({
           }
           onDisarm();
           setPinDigits([]);
+          setLockoutSeconds(0);
         } else {
+          const lockedSecs = securityManager.getLockoutRemainingSeconds();
+          setLockoutSeconds(lockedSecs);
           setPinError(true);
           setTimeout(() => {
             setPinDigits([]);
@@ -154,7 +174,10 @@ export const EmergencyActiveOverlay: React.FC<EmergencyActiveOverlayProps> = ({
   const lat = location.latitude;
   const lng = location.longitude;
   const mapsUrl = (lat && lng) ? `https://maps.google.com/?q=${lat},${lng}` : 'Pending GPS lock';
-  const trackUrl = `${APP_PUBLIC_URL}/?track=${eventId}`;
+  const trackingToken = localStorage.getItem('safenex_active_tracking_token');
+  const trackUrl = trackingToken
+    ? `${APP_PUBLIC_URL}/?track=${eventId}&token=${trackingToken}`
+    : `${APP_PUBLIC_URL}/?track=${eventId}`;
   const whatsappMsg = encodeURIComponent(
     `🚨 *SAFENEX CRITICAL EMERGENCY ALERT*\nEmergency SOS has been triggered!\n\n📍 *Live Location*: ${mapsUrl}\n🛰️ *Incident Tracking ID*: ${eventId}\n🌐 *Portal*: ${trackUrl}\n\nPlease check on me immediately!`
   );
@@ -237,11 +260,72 @@ export const EmergencyActiveOverlay: React.FC<EmergencyActiveOverlayProps> = ({
         >
           <Share2 className="w-4 h-4" />
           <span>
-            {primaryGuardian 
-              ? `Dispatch Alert to Primary Guardian (${primaryGuardian.name})` 
+            {primaryGuardian
+              ? `Dispatch WhatsApp to Primary Guardian (${primaryGuardian.name})`
               : 'Dispatch Alert via WhatsApp'}
           </span>
         </a>
+
+        {/* AI Emergency SMS Quick-Copy Button */}
+        {emergencyMessages && (
+          <button
+            onClick={() => {
+              navigator.clipboard.writeText(emergencyMessages.smsMessage);
+              setCopiedSms(true);
+              setTimeout(() => setCopiedSms(false), 2000);
+            }}
+            className="w-full py-2.5 px-4 rounded-2xl bg-[#142B35] hover:bg-[#1C3B4A] border border-[#24434A] text-[#F4FAFA] text-xs font-semibold flex items-center justify-center gap-2 transition"
+          >
+            {copiedSms ? <Check className="w-3.5 h-3.5 text-[#00E6A0]" /> : <Copy className="w-3.5 h-3.5 text-[#35DDF2]" />}
+            <span>{copiedSms ? 'Verified Emergency SMS Copied!' : 'Copy AI-Verified Emergency SMS (160 chars)'}</span>
+          </button>
+        )}
+
+        {/* Real-Time AI Threat Assessment Badge & Indicators */}
+        {(threatAssessment || incidentAssessment) && (
+          <div className="p-3.5 rounded-2xl bg-[#0B151D]/90 border border-[#24434A] text-xs">
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="flex items-center gap-1.5 font-bold text-[#35DDF2]">
+                <Sparkles className="w-3.5 h-3.5" />
+                {threatAssessment?.uncertaintyExplanation?.toLowerCase().includes('heuristic') ||
+                 threatAssessment?.uncertaintyExplanation?.toLowerCase().includes('client-side')
+                  ? 'LOCAL SAFETY HEURISTICS'
+                  : 'AI THREAT INTELLIGENCE'}
+              </span>
+              <div className="flex items-center gap-1.5">
+                <span className={`px-1.5 py-0.5 rounded-full text-[9px] font-mono font-bold border ${
+                  threatAssessment?.uncertaintyExplanation?.toLowerCase().includes('heuristic') ||
+                  threatAssessment?.uncertaintyExplanation?.toLowerCase().includes('client-side')
+                    ? 'bg-[#FFB800]/15 text-[#FFB800] border-[#FFB800]/30'
+                    : 'bg-[#35DDF2]/15 text-[#35DDF2] border-[#35DDF2]/30'
+                }`}>
+                  {threatAssessment?.uncertaintyExplanation?.toLowerCase().includes('heuristic') ||
+                   threatAssessment?.uncertaintyExplanation?.toLowerCase().includes('client-side')
+                    ? 'HEURISTIC FALLBACK'
+                    : 'GEMINI 2.5 FLASH'}
+                </span>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-mono bg-[#FF304F]/15 text-[#FF304F] border border-[#FF304F]/30 font-bold">
+                  {threatAssessment?.incidentCategory || incidentAssessment?.severityLevel || 'EVALUATED'}
+                </span>
+              </div>
+            </div>
+            <p className="text-[11px] text-[#A2B5BF] leading-relaxed mb-1.5">
+              {threatAssessment?.incidentSummary || incidentAssessment?.situationalContext}
+            </p>
+            {threatAssessment && (
+              <div className="flex items-center justify-between text-[10px] text-[#708792] font-mono">
+                <span>Confidence: {Math.round(threatAssessment.confidenceLevel * 100)}%</span>
+                <span className="truncate max-w-[220px]">{threatAssessment.uncertaintyExplanation}</span>
+              </div>
+            )}
+            {guardianAcknowledged && (
+              <div className="mt-2 pt-1.5 border-t border-[#24434A] flex items-center gap-1.5 text-[11px] text-[#00E6A0]">
+                <ShieldCheck className="w-3.5 h-3.5" />
+                <span>Guardian acknowledgment confirmed</span>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Cryptographic Disarm Keypad */}
@@ -268,8 +352,10 @@ export const EmergencyActiveOverlay: React.FC<EmergencyActiveOverlayProps> = ({
         </div>
 
         {pinError && (
-          <span className="text-[11px] text-[#FF304F] font-bold my-1">
-            Incorrect cryptographic PIN.
+          <span className="text-[11px] text-[#FF304F] font-bold my-1 text-center">
+            {lockoutSeconds > 0
+              ? `Locked out for ${lockoutSeconds}s. Too many failed attempts.`
+              : 'Incorrect disarm PIN.'}
           </span>
         )}
 

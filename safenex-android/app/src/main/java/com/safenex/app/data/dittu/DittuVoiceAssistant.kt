@@ -235,19 +235,21 @@ class DittuVoiceAssistant(
         val lower = text.lowercase(Locale.US).trim()
 
         when {
-            // 1. Emergency Trigger Intent: "HELP!", "Emergency", "Save me"
+            // 1. Emergency Trigger Intent: "HELP!", "Emergency", "Save me", "காப்பாத்துங்க", "உதவி", "ஆபத்து"
             lower.contains("help") || lower.contains("emergency") || lower.contains("save me") ||
-                    lower.contains("danger") || lower.contains("sos") -> {
+                    lower.contains("danger") || lower.contains("sos") ||
+                    text.contains("காப்பாத்து") || text.contains("உதவி") || text.contains("ஆபத்து") || text.contains("அவசரம்") -> {
                 Log.w(TAG, "DITTU INTENT DETECTED: TriggerEmergency! Phrase: \"$text\"")
-                speak("Emergency mode activated! Alerting your guardians and starting recording.")
+                speak(if (text.contains("காப்பாத்து") || text.contains("உதவி")) "அவசர எச்சரிக்கை! கார்டியனுக்கு தகவல் அனுப்பப்படுகிறது." else "Emergency mode activated! Alerting your guardians and starting recording.")
                 onIntentRecognized?.invoke(DittuVoiceIntent.TriggerEmergency)
             }
 
-            // 2. Call Guardian Intent: "Call guardian", "Call mom", "Call for help"
+            // 2. Call Guardian Intent: "Call guardian", "கார்டியனை கூப்பிடு"
             lower.contains("call guardian") || lower.contains("call my guardian") ||
                     lower.contains("call primary") || lower.contains("call for help") ||
                     lower.contains("call mom") || lower.contains("call dad") ||
-                    lower.contains("dial guardian") || lower.contains("call contact") -> {
+                    lower.contains("dial guardian") || lower.contains("call contact") ||
+                    text.contains("கார்டியன்") || text.contains("கூப்பிடு") -> {
                 Log.i(TAG, "DITTU INTENT DETECTED: CallGuardian! Phrase: \"$text\"")
                 speak("Calling your primary guardian now.")
                 onIntentRecognized?.invoke(DittuVoiceIntent.CallGuardian)
@@ -256,15 +258,17 @@ class DittuVoiceAssistant(
             // 3. Share Location to Guardian Intent: "Share location", "Send location to guardian", "WhatsApp location"
             lower.contains("share location") || lower.contains("send location") ||
                     lower.contains("whatsapp location") || lower.contains("share my location") ||
-                    lower.contains("send my location") || lower.contains("share live location") -> {
+                    lower.contains("send my location") || lower.contains("share live location") ||
+                    text.contains("பகிர்") -> {
                 Log.i(TAG, "DITTU INTENT DETECTED: ShareLocationToGuardian! Phrase: \"$text\"")
                 speak("Sharing your live GPS location to your primary guardian on WhatsApp.")
                 onIntentRecognized?.invoke(DittuVoiceIntent.ShareLocationToGuardian)
             }
 
-            // 4. Location Query Intent: "Where am I?", "What is my location?"
+            // 4. Location Query Intent: "Where am I?", "நான் எங்க இருக்கேன்?"
             lower.contains("where am i") || lower.contains("my location") ||
-                    lower.contains("what is my location") || lower.contains("current location") -> {
+                    lower.contains("what is my location") || lower.contains("current location") ||
+                    text.contains("எங்க") || text.contains("இடம்") -> {
                 Log.i(TAG, "DITTU INTENT DETECTED: QueryLocation! Phrase: \"$text\"")
                 onIntentRecognized?.invoke(DittuVoiceIntent.QueryLocation)
             }

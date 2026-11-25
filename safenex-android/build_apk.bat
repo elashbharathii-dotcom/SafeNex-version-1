@@ -4,18 +4,20 @@ echo ===================================================
 echo SAFENEX Android Build (CLI Standalone)
 echo ===================================================
 
-if exist "C:\Program Files\Processing\app\resources\jdk\bin\java.exe" (
-    set "JAVA_HOME=C:\Program Files\Processing\app\resources\jdk"
-) else if exist "C:\Program Files\Android\Android Studio\jbr\bin\java.exe" (
-    set "JAVA_HOME=C:\Program Files\Android\Android Studio\jbr"
+if not defined JAVA_HOME (
+    if exist "C:\Program Files\Android\Android Studio\jbr\bin\java.exe" (
+        set "JAVA_HOME=C:\Program Files\Android\Android Studio\jbr"
+    ) else if exist "C:\Program Files\Java\jdk-17\bin\java.exe" (
+        set "JAVA_HOME=C:\Program Files\Java\jdk-17"
+    ) else if exist "C:\Program Files\Eclipse Adoptium\jdk-17\bin\java.exe" (
+        set "JAVA_HOME=C:\Program Files\Eclipse Adoptium\jdk-17"
+    )
 )
 
 set "PATH=%JAVA_HOME%\bin;%PATH%"
 if not defined ANDROID_HOME (
     if exist "%LOCALAPPDATA%\Android\Sdk" (
         set "ANDROID_HOME=%LOCALAPPDATA%\Android\Sdk"
-    ) else if exist "C:\Users\pream\AppData\Local\Android\Sdk" (
-        set "ANDROID_HOME=C:\Users\pream\AppData\Local\Android\Sdk"
     )
 )
 set "GRADLE_OPTS=-Dorg.gradle.jvmargs=-Xmx2048m -XX:MaxMetaspaceSize=512m"

@@ -1,46 +1,83 @@
 import React, { useState, useRef } from 'react';
-import { Mic, MicOff, Sparkles } from 'lucide-react';
+import { Mic, MicOff, Sparkles, Languages } from 'lucide-react';
+import { dittuAIService } from '../services/ai/DITTUAIService';
+import { LocationState } from '../types';
 
 interface DittuVoiceCardProps {
   onTriggerSos: (source: string) => void;
   onCallGuardian: () => void;
   onQueryLocation: () => void;
+  location?: LocationState;
+  isEmergencyActive?: boolean;
+  batteryLevel?: number | null;
+  primaryGuardianName?: string;
 }
 
 export const DittuVoiceCard: React.FC<DittuVoiceCardProps> = ({
   onTriggerSos,
   onCallGuardian,
   onQueryLocation,
+  location,
+  isEmergencyActive = false,
+  batteryLevel,
+  primaryGuardianName,
 }) => {
   const [isListening, setIsListening] = useState(false);
-  const [transcript, setTranscript] = useState('DITTU voice standby. Tap mic or speak "HELP!"');
+  const [transcript, setTranscript] = useState('DITTU Bilingual AI Assistant standby. Speak in English or தமிழ்.');
+  const [detectedLang, setDetectedLang] = useState<'en' | 'ta'>('en');
+  const [lastIntent, setLastIntent] = useState<string | null>(null);
+  const [isProcessing, setIsProcessing] = useState(false);
   const recognitionRef = useRef<any>(null);
 
-  const speak = (msg: string) => {
+  const speak = (msg: string, lang: 'en' | 'ta' = 'en') => {
     if ('speechSynthesis' in window) {
       window.speechSynthesis.cancel();
       const u = new SpeechSynthesisUtterance(msg);
       u.rate = 1.0;
       u.pitch = 1.0;
+      u.lang = lang === 'ta' ? 'ta-IN' : 'en-US';
       window.speechSynthesis.speak(u);
     }
   };
 
-  const handleCommand = (rawText: string) => {
-    const text = rawText.toLowerCase().trim();
+  const handleCommand = async (rawText: string) => {
+    if (!rawText.trim()) return;
     setTranscript(`"${rawText}"`);
+    setIsProcessing(true);
 
-    if (text.includes('help') || text.includes('emergency') || text.includes('danger') || text.includes('save me')) {
-      speak('Emergency alert detected! Activating SafeNex protocol.');
-      onTriggerSos('VOICE');
-    } else if (text.includes('call') || text.includes('guardian') || text.includes('contact')) {
-      speak('Calling primary guardian now.');
-      onCallGuardian();
-    } else if (text.includes('where') || text.includes('location') || text.includes('gps')) {
-      speak('GPS location is locked and streaming to your secure cloud.');
-      onQueryLocation();
-    } else if (text.includes('status')) {
-      speak('All systems nominal. BLE Band paired, GPS locked, 24/7 AI Shield armed.');
+    try {
+      const result = await dittuAIService.processVoiceCommand(
+        rawText,
+        location,
+        isEmergencyActive,
+        batteryLevel,
+        primaryGuardianName
+      );
+
+      setDetectedLang(result.detectedLanguage);
+      setLastIntent(result.intent);
+      setTranscript(`"${rawText}" → ${result.spokenReply}`);
+
+      // Speak response in detected language
+      speak(result.spokenReply, result.detectedLanguage);
+
+      // Execute intent action
+      if (result.shouldTriggerEmergency || result.intent === 'SOS_TRIGGER') {
+        onTriggerSos('DITTU_AI_VOICE');
+      } else if (result.intent === 'CALL_GUARDIAN') {
+        onCallGuardian();
+      } else if (result.intent === 'QUERY_LOCATION') {
+        onQueryLocation();
+      }
+    } catch (e) {
+      console.warn('[DittuVoiceCard] Error processing voice query:', e);
+      // Fallback
+      if (rawText.toLowerCase().includes('help') || rawText.includes('காப்பாத்து')) {
+        speak('Emergency detected. Triggering SOS.', 'en');
+        onTriggerSos('VOICE_FALLBACK');
+      }
+    } finally {
+      setIsProcessing(false);
     }
   };
 
@@ -63,13 +100,14 @@ export const DittuVoiceCard: React.FC<DittuVoiceCardProps> = ({
 
     try {
       const recognition = new SpeechRec();
-      recognition.continuous = true;
+      recognition.continuous = false;
       recognition.interimResults = true;
-      recognition.lang = 'en-US';
+      // Many modern engines handle both or default to en-US / locale
+      recognition.lang = detectedLang === 'ta' ? 'ta-IN' : 'en-US';
 
       recognition.onstart = () => {
         setIsListening(true);
-        setTranscript('Listening for "HELP!", "Call Guardian", "Where am I"...');
+        setTranscript(detectedLang === 'ta' ? 'கேட்கிறது... ("உதவி", "காப்பாத்துங்க", "எங்க இருக்கேன்")...' : 'Listening for "HELP!", "Call Guardian", "Where am I"...');
       };
 
       recognition.onresult = (event: any) => {
@@ -85,7 +123,13 @@ export const DittuVoiceCard: React.FC<DittuVoiceCardProps> = ({
       recognition.onerror = (e: any) => {
         console.warn('Speech recognition error:', e.error);
         setIsListening(false);
-        setTranscript('Voice recognition paused. Click to reactivate.');
+        if (e.error === 'not-allowed') {
+          setTranscript('Microphone permission denied. Please allow microphone access or use manual SOS.');
+        } else if (e.error === 'network') {
+          setTranscript('Internet unavailable. Browser speech-to-text requires network. Manual SOS works 100% offline.');
+        } else {
+          setTranscript('Voice recognition paused. Tap mic to restart.');
+        }
       };
 
       recognition.onend = () => {
@@ -113,24 +157,44 @@ export const DittuVoiceCard: React.FC<DittuVoiceCardProps> = ({
             <Sparkles className="w-4 h-4" />
           </div>
           <div>
-            <h4 className="text-xs font-bold text-[#F4FAFA] tracking-wide">
-              DITTU AI VOICE ASSISTANT
-            </h4>
-            <p className="text-[11px] text-[#A2B5BF]">Hands-free emergency voice trigger</p>
+            <div className="flex items-center gap-2">
+              <h4 className="text-xs font-bold text-[#F4FAFA] tracking-wide">
+                DITTU AI VOICE ASSISTANT
+              </h4>
+              <span className="px-1.5 py-0.5 rounded text-[9px] font-mono bg-[#35DDF2]/15 text-[#35DDF2] border border-[#35DDF2]/30">
+                {detectedLang === 'ta' ? 'தமிழ்' : 'EN'}
+              </span>
+              {lastIntent && (
+                <span className="px-1.5 py-0.5 rounded text-[9px] font-mono bg-[#00E6A0]/15 text-[#00E6A0]">
+                  {lastIntent}
+                </span>
+              )}
+            </div>
+            <p className="text-[11px] text-[#A2B5BF]">Bilingual emergency AI (English & தமிழ்)</p>
           </div>
         </div>
 
-        <button
-          onClick={toggleListening}
-          className={`p-2.5 rounded-full border transition cursor-pointer ${
-            isListening
-              ? 'bg-[#FF304F] text-white border-[#FF304F] shadow-lg animate-pulse'
-              : 'bg-[#142B35] text-[#A2B5BF] border-[#24434A] hover:border-[#00E6A0]/40'
-          }`}
-          title={isListening ? 'Stop listening' : 'Start voice recognition'}
-        >
-          {isListening ? <Mic className="w-4 h-4" /> : <MicOff className="w-4 h-4" />}
-        </button>
+        <div className="flex items-center gap-1.5">
+          <button
+            onClick={() => setDetectedLang(prev => prev === 'en' ? 'ta' : 'en')}
+            className="p-2 rounded-xl bg-[#142B35] border border-[#24434A] text-[11px] text-[#A2B5BF] hover:text-[#35DDF2] transition"
+            title="Switch Language (English / தமிழ்)"
+          >
+            <Languages className="w-3.5 h-3.5" />
+          </button>
+
+          <button
+            onClick={toggleListening}
+            className={`p-2.5 rounded-full border transition cursor-pointer ${
+              isListening
+                ? 'bg-[#FF304F] text-white border-[#FF304F] shadow-lg animate-pulse'
+                : 'bg-[#142B35] text-[#A2B5BF] border-[#24434A] hover:border-[#00E6A0]/40'
+            }`}
+            title={isListening ? 'Stop listening' : 'Start voice recognition'}
+          >
+            {isListening ? <Mic className="w-4 h-4" /> : <MicOff className="w-4 h-4" />}
+          </button>
+        </div>
       </div>
 
       {/* Waveform / Visualizer */}
@@ -143,6 +207,11 @@ export const DittuVoiceCard: React.FC<DittuVoiceCardProps> = ({
             <span className="w-1 bg-[#00E6A0] rounded-full animate-[pulse_0.5s_ease-in-out_infinite] h-7" />
             <span className="w-1 bg-[#35DDF2] rounded-full animate-[pulse_0.7s_ease-in-out_infinite] h-5" />
           </div>
+        ) : isProcessing ? (
+          <div className="flex items-center gap-2 text-xs text-[#35DDF2]">
+            <Sparkles className="w-3.5 h-3.5 animate-spin" />
+            <span>DITTU AI Reasoning...</span>
+          </div>
         ) : (
           <p className="text-xs font-mono text-[#A2B5BF] text-center line-clamp-2">
             {transcript}
@@ -150,25 +219,31 @@ export const DittuVoiceCard: React.FC<DittuVoiceCardProps> = ({
         )}
       </div>
 
-      {/* Trigger Pills */}
-      <div className="flex items-center justify-between gap-1.5 mt-2">
+      {/* Trigger Pills - English and Tamil */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 mt-2">
         <button
           onClick={() => handleCommand('help')}
-          className="flex-1 py-1.5 px-2 rounded-xl bg-[#FF304F]/10 hover:bg-[#FF304F]/20 border border-[#FF304F]/20 text-[11px] font-semibold text-[#FF304F] transition text-center"
+          className="py-1.5 px-2 rounded-xl bg-[#FF304F]/10 hover:bg-[#FF304F]/20 border border-[#FF304F]/20 text-[11px] font-semibold text-[#FF304F] transition text-center"
         >
           Say "HELP!"
         </button>
         <button
-          onClick={() => handleCommand('call guardian')}
-          className="flex-1 py-1.5 px-2 rounded-xl bg-[#142B35] hover:bg-[#1A3644] border border-[#24434A] text-[11px] font-semibold text-[#A2B5BF] hover:text-[#00E6A0] transition text-center"
+          onClick={() => handleCommand('காப்பாத்துங்க')}
+          className="py-1.5 px-2 rounded-xl bg-[#FF304F]/10 hover:bg-[#FF304F]/20 border border-[#FF304F]/20 text-[11px] font-semibold text-[#FF304F] transition text-center"
         >
-          Say "Call"
+          "காப்பாத்துங்க"
         </button>
         <button
           onClick={() => handleCommand('where am i')}
-          className="flex-1 py-1.5 px-2 rounded-xl bg-[#142B35] hover:bg-[#1A3644] border border-[#24434A] text-[11px] font-semibold text-[#A2B5BF] hover:text-[#35DDF2] transition text-center"
+          className="py-1.5 px-2 rounded-xl bg-[#142B35] hover:bg-[#1A3644] border border-[#24434A] text-[11px] font-semibold text-[#A2B5BF] hover:text-[#35DDF2] transition text-center"
         >
-          Say "Where"
+          "Where am I"
+        </button>
+        <button
+          onClick={() => handleCommand('எங்க இருக்கேன்')}
+          className="py-1.5 px-2 rounded-xl bg-[#142B35] hover:bg-[#1A3644] border border-[#24434A] text-[11px] font-semibold text-[#A2B5BF] hover:text-[#35DDF2] transition text-center"
+        >
+          "எங்க இருக்கேன்"
         </button>
       </div>
     </div>

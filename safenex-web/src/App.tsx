@@ -6,7 +6,10 @@ import {
   BleBandState, 
   CommuteSession, 
   SupabaseHealth,
-  UserProfile 
+  UserProfile,
+  ThreatIntelligenceResult,
+  IncidentAssessmentResult,
+  EmergencyMessageResult
 } from './types';
 import { useLocalStorage } from './hooks/useLocalStorage';
 import { useGeolocation } from './hooks/useGeolocation';
@@ -21,6 +24,11 @@ import { supabaseService } from './services/supabaseService';
 import { bleService } from './services/bleService';
 import { audioSiren } from './services/audioSirenService';
 import { securityManager } from './lib/security';
+import { threatIntelligenceService } from './services/ai/ThreatIntelligenceService';
+import { incidentAssessmentService } from './services/ai/IncidentAssessmentService';
+import { emergencyMessageService } from './services/ai/EmergencyMessageService';
+import { incidentSummaryService } from './services/ai/IncidentSummaryService';
+import { APP_PUBLIC_URL } from './lib/constants';
 
 // Layout & Overlays
 import { AppLayout } from './components/AppLayout';
@@ -71,6 +79,12 @@ export function App() {
   const [activeEventId, setActiveEventId] = useState<string>('');
   const [emergencyTriggerSource, setEmergencyTriggerSource] = useState('Manual Button');
 
+  // SAFENEX AI CORE State
+  const [threatAssessment, setThreatAssessment] = useState<ThreatIntelligenceResult | null>(null);
+  const [incidentAssessment, setIncidentAssessment] = useState<IncidentAssessmentResult | null>(null);
+  const [emergencyMessages, setEmergencyMessages] = useState<EmergencyMessageResult | null>(null);
+  const [guardianAcknowledged, setGuardianAcknowledged] = useState(false);
+
   // Commute Dead-Man's Timer State
   const [commuteSession, setCommuteSession] = useState<CommuteSession>({
     isActive: false,
@@ -96,9 +110,22 @@ export function App() {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   };
 
-  // 1. Initialize Cryptographic Salted PIN
+  // 1. Initialize Cryptographic Salted PIN & Check Active Emergency Restore
   useEffect(() => {
     securityManager.initDefaultPinIfUnset();
+    try {
+      const savedActive = localStorage.getItem('safenex_active_emergency');
+      if (savedActive) {
+        const parsed = JSON.parse(savedActive);
+        if (parsed?.active && parsed?.eventId) {
+          setActiveEventId(parsed.eventId);
+          setEmergencyTriggerSource(parsed.source || 'Emergency Resumed');
+          setIsEmergencyActive(true);
+        }
+      }
+    } catch (e) {
+      console.warn('Failed restoring active emergency state:', e);
+    }
   }, []);
 
   // 2. Check Supabase Auth Session
@@ -227,9 +254,46 @@ export function App() {
 
     setActiveEventId(eventId);
     setIsEmergencyActive(true);
+    localStorage.setItem('safenex_active_emergency', JSON.stringify({
+      active: true,
+      eventId,
+      source: displaySource,
+      activatedAt: Date.now()
+    }));
 
     // Audio warning chirp
     audioSiren.playChirp(false);
+
+    // Asynchronous AI Core Analysis (Emergency-First: Zero Delay on SOS Dispatch)
+    (async () => {
+      try {
+        const trackingToken = localStorage.getItem('safenex_active_tracking_token');
+        const trackingUrl = trackingToken
+          ? `${APP_PUBLIC_URL}/?track=${eventId}&token=${trackingToken}`
+          : `${APP_PUBLIC_URL}/?track=${eventId}`;
+
+        const [threatRes, assessRes, msgRes] = await Promise.allSettled([
+          threatIntelligenceService.analyzeThreat(displaySource, undefined, location),
+          incidentAssessmentService.assessIncident(eventId, displaySource, location),
+          emergencyMessageService.generateMessages(
+            user.name,
+            'ACTIVE',
+            displaySource,
+            location,
+            bleBand.batteryLevel,
+            user.medicalNotes,
+            trackingUrl
+          ),
+        ]);
+
+        if (threatRes.status === 'fulfilled') setThreatAssessment(threatRes.value);
+        if (assessRes.status === 'fulfilled') setIncidentAssessment(assessRes.value);
+        if (msgRes.status === 'fulfilled') setEmergencyMessages(msgRes.value);
+        setGuardianAcknowledged(true);
+      } catch (e) {
+        console.warn('[App] Async AI assessment error (SOS unaffected):', e);
+      }
+    })();
 
     // Audit log
     setActivities((prev) => [
@@ -251,6 +315,33 @@ export function App() {
   const handleDisarmEmergency = () => {
     setIsEmergencyActive(false);
     audioSiren.stopSiren();
+    localStorage.removeItem('safenex_active_emergency');
+
+    // Generate Forensic Incident Summary asynchronously
+    if (activeEventId) {
+      incidentSummaryService.summarizeIncident({
+        id: activeEventId,
+        created_at: new Date().toISOString(),
+        device_name: bleBand.connected ? bleBand.name : 'SAFENEX Web Client',
+        trigger_source: emergencyTriggerSource,
+        latitude: location.latitude,
+        longitude: location.longitude,
+        accuracy: location.accuracy,
+        address: location.address || null,
+        maps_url: null,
+        audio_url: null,
+        photo_front_url: null,
+        photo_back_url: null,
+        video_url: null,
+        status: 'RESOLVED',
+        guardians_notified: guardians.length,
+        resolved_at: new Date().toISOString(),
+      }, user.name).then(summary => {
+        console.log('[App] Incident Forensic Summary ready:', summary.title);
+      }).catch(err => {
+        console.warn('[App] Forensic summary generation error:', err);
+      });
+    }
 
     setActivities((prev) => [
       {
@@ -450,6 +541,10 @@ export function App() {
         location={location}
         onDisarm={handleDisarmEmergency}
         primaryGuardian={primaryGuardian}
+        threatAssessment={threatAssessment}
+        incidentAssessment={incidentAssessment}
+        emergencyMessages={emergencyMessages}
+        guardianAcknowledged={guardianAcknowledged}
       />
     </>
   );

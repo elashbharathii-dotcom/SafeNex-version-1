@@ -219,11 +219,14 @@ export const HomePage: React.FC<HomePageProps> = ({
             </button>
           </div>
 
-          {/* DITTU Voice Assistant Card with Waveform */}
+          {/* DITTU Voice Assistant Card (Enhanced Bilingual AI) */}
           <DittuVoiceCard
             onTriggerSos={onTriggerSos}
             onCallGuardian={handleCallGuardian}
             onQueryLocation={() => onNotify('Location Telemetry', location.address || 'GPS lock pending', 'info')}
+            location={location}
+            batteryLevel={bleBand.batteryLevel}
+            primaryGuardianName={primaryGuardian?.name}
           />
         </div>
       </div>

@@ -111,8 +111,13 @@ class EmergencyManager(
 
     /**
      * Activates Emergency Mode from an SOS event.
+     * Enforces strict duplicate suppression if an emergency is already active.
      */
     fun triggerEmergency(event: EmergencyEvent) {
+        if (_emergencyState.value == EmergencyState.EMERGENCY_ACTIVE) {
+            Log.w(TAG, "Emergency already ACTIVE. Suppressing duplicate trigger from ${event.source}")
+            return
+        }
         Log.w(TAG, "TRIGGER EMERGENCY ACTIVATED! Source: ${event.source}")
         _activeEmergencyEvent.value = event
         _emergencyState.value = EmergencyState.EMERGENCY_ACTIVE

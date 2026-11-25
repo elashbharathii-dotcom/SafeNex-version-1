@@ -1,5 +1,6 @@
 # Android & Gradle
 **/.gradle/
+**/.gradle_home/
 **/build/
 **/app/build/
 **/*.iml

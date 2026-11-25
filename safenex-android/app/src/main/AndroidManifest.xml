@@ -74,10 +74,10 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.Safenex">
 
-        <!-- Google Maps SDK API Key -->
+        <!-- Google Maps SDK API Key injected via manifest placeholder from local.properties/env -->
         <meta-data
             android:name="com.google.android.geo.API_KEY"
-            android:value="AIzaSyByC7_EfClKMEGaeVQI5Q5b4BWfL2zVac4" />
+            android:value="${MAPS_API_KEY}" />
         <meta-data
             android:name="com.google.android.gms.version"
             android:value="@integer/google_play_services_version" />

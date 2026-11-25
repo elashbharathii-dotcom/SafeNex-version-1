@@ -106,6 +106,74 @@ export interface EmergencyEvent {
   status: 'ACTIVE' | 'VERIFYING' | 'RESOLVED';
   guardians_notified: number;
   resolved_at: string | null;
+  ai_threat_assessment?: ThreatIntelligenceResult | null;
+  ai_incident_summary?: IncidentSummaryResult | null;
+}
+
+export interface ThreatIntelligenceResult {
+  incidentCategory: 'PHYSICAL_DURESS' | 'TRANSIT_ANOMALY' | 'MEDICAL_CONCERN' | 'PRECAUTIONARY' | 'UNVERIFIED_DISTRESS';
+  incidentSummary: string;
+  observedIndicators: string[];
+  potentialRisks: string[];
+  confidenceLevel: number;
+  uncertaintyExplanation: string;
+  recommendedActions: string[];
+  timestamp: string;
+}
+
+export interface IncidentAssessmentResult {
+  eventId: string;
+  severityLevel: 'INFO' | 'LOW' | 'ELEVATED' | 'HIGH' | 'CRITICAL';
+  confidenceScore: number;
+  immediateRisks: string[];
+  verifiedObservations: string[];
+  situationalContext: string;
+  deEscalationGuidance: string;
+  guardianActionRequired: boolean;
+  evaluatedAt: string;
+}
+
+export interface EmergencyMessageResult {
+  smsMessage: string;
+  whatsAppMessage: string;
+  voiceBroadcastText: string;
+  generatedAt: string;
+  verifiedDataIncluded: {
+    hasCoordinates: boolean;
+    hasTime: boolean;
+    hasStatus: boolean;
+    hasObservations: boolean;
+  };
+}
+
+export interface IncidentSummaryResult {
+  eventId: string;
+  title: string;
+  executiveSummary: string;
+  chronologicalTimeline: Array<{
+    time: string;
+    event: string;
+    type: 'trigger' | 'location' | 'notification' | 'telemetry' | 'resolution';
+  }>;
+  factualObservations: string[];
+  sensorInferences: string[];
+  evidenceAudit: {
+    videoRecorded: boolean;
+    audioRecorded: boolean;
+    totalGpsFixes: number;
+    guardiansNotified: number;
+  };
+  formattedReportMarkdown: string;
+  generatedAt: string;
+}
+
+export interface DittuResult {
+  spokenReply: string;
+  detectedLanguage: 'en' | 'ta';
+  intent: 'SOS_TRIGGER' | 'CALL_GUARDIAN' | 'QUERY_LOCATION' | 'QUERY_STATUS' | 'CONVERSATIONAL' | 'SAFETY_CONFIRMATION';
+  shouldTriggerEmergency: boolean;
+  confidence: number;
+  fallbackUsed: boolean;
 }
 
 export interface SupabaseHealth {
